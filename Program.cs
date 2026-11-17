@@ -1,0 +1,215 @@
+using System.Diagnostics;
+using System.Drawing.Drawing2D;
+using static LaunchHere.Native;
+
+namespace LaunchHere;
+
+internal static class Program
+{
+    [STAThread]
+    static int Main(string[] args)
+    {
+        ApplicationConfiguration.Initialize();
+        var log = new Logger();
+
+        if (args.Contains("--selftest")) return SelfTest.Run(log);
+        if (args.Length >= 4 && args[0] == "--arm-test") return SelfTest.ArmTest(log, args);
+
+        using var mutex = new Mutex(true, @"Local\LaunchHere.SingleInstance", out bool first);
+        if (!first) return 0;
+
+        Application.Run(new TrayContext(log));
+        return 0;
+    }
+}
+
+/// <summary>Tray icon + menu; owns the Tracker.</summary>
+internal sealed class TrayContext : ApplicationContext
+{
+    readonly Logger _log;
+    readonly Tracker _tracker;
+    readonly NotifyIcon _tray;
+    readonly ToolStripMenuItem _enabledItem;
+    Config _cfg;
+
+    public TrayContext(Logger log)
+    {
+        _log = log;
+        _cfg = Config.Load(log);
+        _log.Debug = _cfg.DebugLog;
+        WindowMover.VerticalShrinkShare = _cfg.VerticalShrinkShare;
+        _log.Info($"started; mode={_cfg.Mode}, apps=[{string.Join(", ", _cfg.Apps)}]");
+        foreach (var s in Screen.AllScreens)
+            _log.Info($"  monitor {s.DeviceName} {s.Bounds} primary={s.Primary}");
+
+        _tracker = new Tracker(_cfg, log);
+
+        _enabledItem = new ToolStripMenuItem("Enabled", null, (_, _) => SetEnabled(!_tracker.Enabled)) { Checked = true };
+        var menu = new ContextMenuStrip();
+        menu.Items.Add(_enabledItem);
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Edit settings (config.json)", null, (_, _) => Open(Config.FilePath));
+        menu.Items.Add("Reload settings", null, (_, _) => Reload());
+        menu.Items.Add("Open log", null, (_, _) => Open(Logger.FilePath));
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Exit", null, (_, _) => ExitThread());
+
+        _tray = new NotifyIcon
+        {
+            Icon = MakeIcon(true),
+            Text = "LaunchHere - opens apps on the monitor you clicked",
+            ContextMenuStrip = menu,
+            Visible = true,
+        };
+        _tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) SetEnabled(!_tracker.Enabled); };
+    }
+
+    void SetEnabled(bool on)
+    {
+        _tracker.Enabled = on;
+        _enabledItem.Checked = on;
+        _tray.Icon = MakeIcon(on);
+        _tray.Text = on ? "LaunchHere - on" : "LaunchHere - paused";
+        _log.Info(on ? "enabled" : "paused");
+    }
+
+    void Reload()
+    {
+        _cfg = Config.Load(_log);
+        _log.Debug = _cfg.DebugLog;
+        WindowMover.VerticalShrinkShare = _cfg.VerticalShrinkShare;
+        _tracker.UpdateConfig(_cfg);
+        _log.Info($"settings reloaded; mode={_cfg.Mode}, apps=[{string.Join(", ", _cfg.Apps)}]");
+    }
+
+    static void Open(string path)
+    {
+        if (!File.Exists(path)) File.WriteAllText(path, "");
+        Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+    }
+
+    /// <summary>Two little monitors with an arrow; grey when paused.</summary>
+    static Icon MakeIcon(bool on)
+    {
+        using var bmp = new Bitmap(32, 32);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            var color = on ? Color.FromArgb(0, 120, 215) : Color.Gray;
+            using var pen = new Pen(color, 2.5f);
+            using var brush = new SolidBrush(color);
+            g.DrawRectangle(pen, 1, 6, 12, 10);
+            g.DrawRectangle(pen, 18, 6, 12, 10);
+            g.FillRectangle(brush, 5, 18, 4, 2);
+            g.FillRectangle(brush, 22, 18, 4, 2);
+            g.FillPolygon(brush, new[] { new Point(9, 24), new Point(20, 24), new Point(20, 21), new Point(26, 26), new Point(20, 31), new Point(20, 28), new Point(9, 28) });
+        }
+        return Icon.FromHandle(bmp.GetHicon());
+    }
+
+    protected override void ExitThreadCore()
+    {
+        _tray.Visible = false;
+        _tray.Dispose();
+        _tracker.Dispose();
+        _log.Info("exited");
+        base.ExitThreadCore();
+    }
+}
+
+/// <summary>`LaunchHere.exe --selftest`: moves a test window between monitors (normal and
+/// maximized) and writes the results to the log. Exit code 0 = all passed.</summary>
+internal static class SelfTest
+{
+    /// <summary>`--arm-test X Y program [args...]`: pretend a taskbar click happened at X,Y, launch the
+    /// program, trace what happens for 10 s, then exit.</summary>
+    public static int ArmTest(Logger log, string[] args)
+    {
+        log.Debug = true;
+        var cfg = Config.Load(log);
+        WindowMover.VerticalShrinkShare = cfg.VerticalShrinkShare;
+        using var tracker = new Tracker(cfg, log);
+        tracker.TestArm(new POINT { X = int.Parse(args[1]), Y = int.Parse(args[2]) });
+        var psi = new ProcessStartInfo(args[3]) { UseShellExecute = true };
+        foreach (var a in args.Skip(4)) psi.ArgumentList.Add(a);
+        if (psi.ArgumentList.Count > 0) psi.UseShellExecute = false;
+        log.Info($"arm-test: launching {args[3]} {string.Join(' ', args.Skip(4))}");
+        Process.Start(psi);
+        var timer = new System.Windows.Forms.Timer { Interval = 10000 };
+        timer.Tick += (_, _) => Application.ExitThread();
+        timer.Start();
+        Application.Run();
+        log.Info("arm-test: done");
+        return 0;
+    }
+
+    public static int Run(Logger log)
+    {
+        log.Debug = true;
+        var screens = Screen.AllScreens;
+        if (screens.Length < 2) { log.Error("selftest needs 2+ monitors"); return 2; }
+
+        var form = new Form { Text = "LaunchHere selftest", StartPosition = FormStartPosition.Manual, Width = 900, Height = 600 };
+        form.Location = new Point(screens[0].WorkingArea.Left + 100, screens[0].WorkingArea.Top + 100);
+        form.Show();
+        Application.DoEvents();
+        IntPtr h = form.Handle;
+        int failures = 0;
+
+        // Put the test window at an exact physical rect (twice: the first call may trigger a DPI rescale).
+        void SetRect(int x, int y, int w, int hh)
+        {
+            for (int i = 0; i < 2; i++)
+            {
+                SetWindowPos(h, IntPtr.Zero, x, y, w, hh, SWP_NOZORDER | SWP_NOACTIVATE);
+                Application.DoEvents();
+            }
+        }
+
+        void Step(string name, Screen target, bool maximize)
+        {
+            if (maximize) { form.WindowState = FormWindowState.Maximized; Application.DoEvents(); }
+            var mon = MonitorFromPoint(new POINT { X = target.Bounds.Left + 10, Y = target.Bounds.Top + 10 }, MONITOR_DEFAULTTONEAREST);
+            var sw = Stopwatch.StartNew();
+            var result = WindowMover.Place(h, mon, out string detail);
+            Application.DoEvents();
+            WindowMover.ClampToWorkArea(h, mon);
+            Application.DoEvents();
+            bool onTarget = MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST) == mon;
+            bool stillMax = !maximize || IsZoomed(h);
+            GetWindowRect(h, out RECT r);
+            bool ok = result == PlaceResult.Moved && onTarget && stillMax;
+            if (!ok) failures++;
+            log.Info($"selftest {name}: {(ok ? "PASS" : "FAIL")} result={result} {detail} rect={r} zoomed={IsZoomed(h)} ({sw.Elapsed.TotalMilliseconds:F1} ms)");
+        }
+
+        Step("normal  0->1", screens[1], false);
+        Step("normal  1->0", screens[0], false);
+        // Wide window that won't fit the narrow monitor: width should fit exactly, height shrink a little.
+        foreach (var (ww, wh) in new[] { (2090, 1476), (3000, 1600) })
+        {
+            SetRect(screens[0].WorkingArea.Left + 200, screens[0].WorkingArea.Top + 150, ww, wh);
+            Step($"wide {ww}x{wh} 0->1", screens[1], false);
+            GetWindowRect(h, out RECT wr);
+            var twa = screens[1].WorkingArea;
+            bool inside = wr.Left >= twa.Left && wr.Right <= twa.Right && wr.Top >= twa.Top && wr.Bottom <= twa.Bottom;
+            if (!inside) failures++;
+            log.Info($"selftest wide {ww}x{wh} inside {twa}: {(inside ? "PASS" : "FAIL")} rect={wr}");
+        }
+        // Edge-style: a normal (not maximized) window covering the whole work area.
+        var w0 = screens[0].WorkingArea;
+        SetRect(w0.Left, w0.Top, w0.Width, w0.Height);
+        Step("full-size normal 0->1", screens[1], false);
+        GetWindowRect(h, out RECT fr);
+        var wa = screens[1].WorkingArea;
+        bool fits = fr.Left >= wa.Left - 1 && fr.Right <= wa.Right + 1 && fr.Top >= wa.Top - 1 && fr.Bottom <= wa.Bottom + 1;
+        if (!fits) failures++;
+        log.Info($"selftest full-size fits target work area {wa}: {(fits ? "PASS" : "FAIL")} rect={fr}");
+        SetRect(w0.Left + 100, w0.Top + 100, 900, 600);
+        Step("maximized 0->1", screens[1], true);
+        Step("maximized 1->0", screens[0], true);
+        form.Close();
+        log.Info($"selftest done: {failures} failure(s)");
+        return failures == 0 ? 0 : 1;
+    }
+}
