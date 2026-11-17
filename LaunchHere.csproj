@@ -10,7 +10,7 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AssemblyName>LaunchHere</AssemblyName>
     <RootNamespace>LaunchHere</RootNamespace>
-    <Version>0.1.0</Version>
+    <Version>0.1.0-beta</Version>
   </PropertyGroup>
 
   <!-- `dotnet publish -c Release` => one standalone LaunchHere.exe (no .NET install needed). -->
