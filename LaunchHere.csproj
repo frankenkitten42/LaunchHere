@@ -10,7 +10,7 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AssemblyName>LaunchHere</AssemblyName>
     <RootNamespace>LaunchHere</RootNamespace>
-    <Version>0.1.0-beta</Version>
+    <Version>0.1.1-beta</Version>
     <!-- Keep the git commit hash out of the product version ("0.1.0-beta", not "0.1.0-beta+<hash>"). -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
