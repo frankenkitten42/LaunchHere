@@ -36,12 +36,15 @@ Tray icon:
 - **Left-click**: pause / resume (the icon turns grey when paused)
 - **Right-click** for a menu with:
   - **Enabled**: pause / resume
+  - **Start with Windows**: run LaunchHere automatically when you sign in
   - **Edit settings (config.json)**
   - **Reload settings**: apply changes without restarting
   - **Open log**
   - **Exit**
 
-Only one copy runs at a time. To start it with Windows, put a shortcut to `LaunchHere.exe` in `shell:startup` (press Win+R and type `shell:startup`).
+Only one copy runs at a time.
+
+**Start with Windows** adds LaunchHere to your user's startup apps (no admin needed). It starts the exe from wherever it is right now. If you move `LaunchHere.exe` to another folder, turn the option on again from the new location. You can also switch it off in Task Manager > Startup apps.
 
 ### Admin (elevated) apps
 

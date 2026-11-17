@@ -14,6 +14,7 @@ internal static class Program
 
         if (args.Contains("--selftest")) return SelfTest.Run(log);
         if (args.Length >= 4 && args[0] == "--arm-test") return SelfTest.ArmTest(log, args);
+        if (args.Contains("--startup-test")) return SelfTest.StartupTest(log);
 
         using var mutex = new Mutex(true, @"Local\LaunchHere.SingleInstance", out bool first);
         if (!first) return 0;
@@ -47,6 +48,11 @@ internal sealed class TrayContext : ApplicationContext
         _enabledItem = new ToolStripMenuItem("Enabled", null, (_, _) => SetEnabled(!_tracker.Enabled)) { Checked = true };
         var menu = new ContextMenuStrip();
         menu.Items.Add(_enabledItem);
+        var startupItem = new ToolStripMenuItem("Start with Windows");
+        startupItem.Click += (_, _) => ToggleStartup(startupItem);
+        menu.Items.Add(startupItem);
+        // Re-read each time: the user may have changed it in Task Manager / Settings meanwhile.
+        menu.Opening += (_, _) => startupItem.Checked = Startup.IsEnabled;
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Edit settings (config.json)", null, (_, _) => Open(Config.FilePath));
         menu.Items.Add("Reload settings", null, (_, _) => Reload());
@@ -71,6 +77,23 @@ internal sealed class TrayContext : ApplicationContext
         _tray.Icon = MakeIcon(on);
         _tray.Text = on ? "LaunchHere - on" : "LaunchHere - paused";
         _log.Info(on ? "enabled" : "paused");
+    }
+
+    void ToggleStartup(ToolStripMenuItem item)
+    {
+        bool on = !Startup.IsEnabled;
+        try
+        {
+            Startup.Set(on);
+            _log.Info(on ? "start with Windows: on" : "start with Windows: off");
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"could not change start with Windows: {ex.Message}");
+            MessageBox.Show($"Could not change the startup setting:\n{ex.Message}", "LaunchHere",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        item.Checked = Startup.IsEnabled;
     }
 
     void Reload()
@@ -141,6 +164,22 @@ internal static class SelfTest
         Application.Run();
         log.Info("arm-test: done");
         return 0;
+    }
+
+    /// <summary>`--startup-test`: turn "Start with Windows" on and off, check each, then restore
+    /// whatever was there before. Exit code 0 = passed.</summary>
+    public static int StartupTest(Logger log)
+    {
+        bool before = Startup.IsEnabled;
+        Startup.Set(true);
+        bool on = Startup.IsEnabled;
+        Startup.Set(false);
+        bool off = !Startup.IsEnabled;
+        Startup.Set(before);
+        bool restored = Startup.IsEnabled == before;
+        bool ok = on && off && restored;
+        log.Info($"startup-test: {(ok ? "PASS" : "FAIL")} on={on} off={off} restored({before})={restored}");
+        return ok ? 0 : 1;
     }
 
     public static int Run(Logger log)
