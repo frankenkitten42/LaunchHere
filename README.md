@@ -87,7 +87,8 @@ Use **Reload settings** in the tray menu after editing.
 ## Known limitations
 
 - **Discord** (and some other apps that hide to the tray instead of closing) can behave inconsistently, because showing a hidden window can look like a new launch.
-- Apps launched some other way (Start menu, Run box, File Explorer, scripts) are not moved; only taskbar and desktop launches are.
+- **Start menu** launches work when you click the Start button and pick the app within 8 seconds (`ArmTimeoutMs`). Opening Start with the Windows key, or taking longer than that, isn't covered yet.
+- Apps launched some other way (Run box, File Explorer, scripts) are not moved.
 - Pinned taskbar icons are shared across all monitors in Windows; per-monitor pinned bars are a possible future feature.
 
 ## Building from source
