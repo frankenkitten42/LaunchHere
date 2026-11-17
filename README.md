@@ -1,5 +1,7 @@
 # LaunchHere
 
+> **⚠️ Beta release (v0.1.0-beta).** LaunchHere works in day-to-day use but is still being tested. Expect rough edges and some apps that don't behave (see [Known limitations](#known-limitations)). Bug reports are welcome. Turn on `DebugLog` and include the relevant lines from `launch-here.log`.
+
 A small Windows tray app for multi-monitor setups: **apps open on the monitor where you clicked to launch them.**
 
 Windows normally opens a new app window on whatever monitor the app remembers (usually your primary one), even if you clicked its icon on the taskbar of your second monitor. LaunchHere notices which monitor the click happened on and moves the new window there, typically within a few milliseconds of it appearing.
