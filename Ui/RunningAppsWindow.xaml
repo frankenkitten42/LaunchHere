@@ -1,0 +1,66 @@
+<Window x:Class="LaunchHere.RunningAppsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Add running apps"
+        Width="660" Height="520" MinWidth="460" MinHeight="320"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/LaunchHere;component/Ui/Styles.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Margin="24,20,24,12">
+            <TextBlock Text="Add running apps" Style="{StaticResource RowTitle}" FontSize="20" FontWeight="SemiBold" />
+            <TextBlock x:Name="HintText" Style="{StaticResource Secondary}" FontSize="13" Margin="0,4,0,0"
+                       Text="Tick the apps to add. Apps already in your list aren't shown." />
+        </StackPanel>
+
+        <Border Grid.Row="1" Style="{StaticResource Card}" Margin="24,0,24,0" Padding="0">
+            <ListView x:Name="AppsList" BorderThickness="0" Background="Transparent" SelectionMode="Single"
+                      ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListView.View>
+                    <GridView>
+                        <GridViewColumn Width="44">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <CheckBox IsChecked="{Binding Picked, Mode=TwoWay}" Focusable="False" IsHitTestVisible="False" />
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+                        <GridViewColumn Header="App" Width="200">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Image Source="{Binding Icon}" Width="16" Height="16" Margin="0,0,8,0" />
+                                        <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+                        <GridViewColumn Header="Window" Width="320" DisplayMemberBinding="{Binding Title}" />
+                    </GridView>
+                </ListView.View>
+            </ListView>
+        </Border>
+
+        <Border Grid.Row="2" BorderThickness="0,1,0,0" Padding="24,16" Margin="0,16,0,0"
+                BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
+                Background="{DynamicResource LayerFillColorDefaultBrush}">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button x:Name="AddButton" Content="Add" MinWidth="110" IsDefault="True" IsEnabled="False"
+                        Style="{DynamicResource AccentButtonStyle}" />
+                <Button Content="Cancel" MinWidth="110" Margin="8,0,0,0" IsCancel="True" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

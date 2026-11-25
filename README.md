@@ -1,6 +1,6 @@
 # LaunchHere
 
-> **⚠️ Beta release (v0.1.2-beta).** LaunchHere works in day-to-day use but is still being tested. Expect rough edges and some apps that don't behave (see [Known limitations](#known-limitations)). Bug reports are welcome. Turn on `DebugLog` and include the relevant lines from `launch-here.log`.
+> **⚠️ Beta release (v0.1.3-beta).** LaunchHere works in day-to-day use but is still being tested. Expect rough edges and some apps that don't behave (see [Known limitations](#known-limitations)). Bug reports are welcome. Turn on **Detailed log** (Settings > Advanced) and include the relevant lines from `launch-here.log`.
 
 A small Windows tray app for multi-monitor setups: **apps open on the monitor where you clicked to launch them.**
 
@@ -25,7 +25,7 @@ For already-open windows, set Windows' **Settings > Personalization > Taskbar > 
 - Windows 10 or 11, x64
 - Two or more monitors (it does nothing useful with one)
 
-The released `LaunchHere.exe` is self-contained, so .NET does not need to be installed.
+The released `LaunchHere.exe` is self-contained (about 75 MB), so .NET does not need to be installed.
 
 ## Usage
 
@@ -58,8 +58,13 @@ Open **Settings...** from the tray menu. Changes apply as soon as you click **OK
 - **Apps**: move every app except the ones listed, or only the ones listed. Add apps by picking from the ones running
   now, browsing for an `.exe`, or typing an exe name. An exe name matches every copy of that app; a full path
   matches only that copy.
-- **Options**: which launches to watch, bringing open windows to the clicked taskbar, and Start with Windows.
+- **Behavior**: which launches to watch, bringing open windows to the clicked taskbar, and Start with Windows.
+- **Updates**: **Check for updates** looks for a newer release on GitHub. **Update now** downloads it, checks it
+  against the release's SHA-256 checksum, replaces `LaunchHere.exe` and restarts. If the new version fails to start,
+  the current one is put back. Your settings and Start with Windows are kept.
 - **Advanced**: timings, how windows that are too wide get shrunk, and the detailed log.
+
+The settings window follows Windows' light/dark mode and accent colour.
 
 Everything is stored in `config.json` next to the exe, which you can also edit by hand (then use **Reload config.json**).
 It is created with defaults on first run:

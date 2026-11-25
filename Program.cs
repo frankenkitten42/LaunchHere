@@ -1,3 +1,5 @@
+using System.Drawing;
+using System.Windows.Forms;
 using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using static LaunchHere.Native;
@@ -17,11 +19,34 @@ internal static class Program
         if (args.Contains("--startup-test")) return SelfTest.StartupTest(log);
         if (args.Length >= 2 && args[0] == "--settings-screenshot") return SelfTest.SettingsScreenshot(log, args[1]);
 
-        using var mutex = new Mutex(true, @"Local\LaunchHere.SingleInstance", out bool first);
-        if (!first) return 0;
+        // After an update the old version is still shutting down: wait for it to let go.
+        bool afterUpdate = args.Contains("--after-update");
+        if (!TakeInstanceLock(afterUpdate ? TimeSpan.FromSeconds(15) : TimeSpan.Zero)) return 0;
 
-        Application.Run(new TrayContext(log));
+        Application.Run(new TrayContext(log, afterUpdate, updateNow: args.Contains("--update-now")));
+        ReleaseInstanceLock();
         return 0;
+    }
+
+    /// <summary>Prefix for named objects (single-instance mutex, update event). The environment variable
+    /// LAUNCHHERE_TEST_INSTANCE gives a test copy its own names, so it can run next to the real one.</summary>
+    public static string InstanceName =>
+        @"Local\LaunchHere" + (Environment.GetEnvironmentVariable("LAUNCHHERE_TEST_INSTANCE") is { Length: > 0 } t ? "." + t : "");
+
+    static Mutex? _instanceLock;
+
+    /// <summary>Only one copy runs at a time. Same name as 0.1.x, so old and new versions see each other.</summary>
+    public static bool TakeInstanceLock(TimeSpan wait)
+    {
+        _instanceLock ??= new Mutex(false, InstanceName + ".SingleInstance");
+        try { return _instanceLock.WaitOne(wait); }
+        catch (AbandonedMutexException) { return true; }   // previous owner died without releasing it
+    }
+
+    /// <summary>Give up the lock (before starting an updated copy). Must run on the thread that took it.</summary>
+    public static void ReleaseInstanceLock()
+    {
+        try { _instanceLock?.ReleaseMutex(); } catch { }
     }
 }
 
@@ -34,13 +59,13 @@ internal sealed class TrayContext : ApplicationContext
     readonly ToolStripMenuItem _enabledItem;
     Config _cfg;
 
-    public TrayContext(Logger log)
+    public TrayContext(Logger log, bool afterUpdate = false, bool updateNow = false)
     {
         _log = log;
         _cfg = Config.Load(log);
         _log.Debug = _cfg.DebugLog;
         WindowMover.VerticalShrinkShare = _cfg.VerticalShrinkShare;
-        _log.Info($"started; mode={_cfg.Mode}, apps=[{string.Join(", ", _cfg.Apps)}]");
+        _log.Info($"started {Updater.CurrentVersion}; mode={_cfg.Mode}, apps=[{string.Join(", ", _cfg.Apps)}]");
         foreach (var s in Screen.AllScreens)
             _log.Info($"  monitor {s.DeviceName} {s.Bounds} primary={s.Primary}");
 
@@ -66,6 +91,53 @@ internal sealed class TrayContext : ApplicationContext
             Visible = true,
         };
         _tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) SetEnabled(!_tracker.Enabled); };
+
+        if (afterUpdate) Updater.ConfirmStarted(_log);
+        if (updateNow) StartHeadlessUpdate();
+    }
+
+    /// <summary>`--update-now` (testing): check, download and install without the settings window.</summary>
+    void StartHeadlessUpdate()
+    {
+        var timer = new System.Windows.Forms.Timer { Interval = 300 };
+        timer.Tick += async (_, _) =>
+        {
+            timer.Dispose();
+            try
+            {
+                var info = await Updater.CheckAsync();
+                _log.Info($"update-now: {(info == null ? "no update" : "found " + info.Version)}");
+                if (info == null) { ExitThread(); return; }
+                string file = await Updater.DownloadAsync(info, null);
+                string? err = await InstallUpdateAsync(file);
+                if (err != null) { _log.Error($"update-now: {err}"); ExitThread(); }
+            }
+            catch (Exception ex) { _log.Error($"update-now: {ex.Message}"); ExitThread(); }
+        };
+        timer.Start();
+    }
+
+    /// <summary>Swap in a downloaded, verified update and restart into it. On success this process
+    /// exits; on failure it carries on as before and the error is returned.</summary>
+    public async Task<string?> InstallUpdateAsync(string downloaded)
+    {
+        _log.Info("update: installing");
+        _settings?.Close();
+        _tracker.Enabled = false;
+        _tray.Visible = false;
+        Program.ReleaseInstanceLock();
+
+        string? err = await Task.Run(() => Updater.SwapAndStart(downloaded, _log));
+        if (err == null)
+        {
+            ExitThread();
+            return null;
+        }
+        _log.Error($"update: {err}");
+        Program.TakeInstanceLock(TimeSpan.FromSeconds(5));
+        _tray.Visible = true;
+        _tracker.Enabled = _enabledItem.Checked;
+        return err;
     }
 
     void SetEnabled(bool on)
@@ -91,23 +163,23 @@ internal sealed class TrayContext : ApplicationContext
         _tracker.UpdateConfig(_cfg);
     }
 
-    SettingsForm? _settings;
+    SettingsWindow? _settings;
 
     void ShowSettings()
     {
-        if (_settings is { IsDisposed: false })
+        if (_settings != null)
         {
-            if (_settings.WindowState == FormWindowState.Minimized) _settings.WindowState = FormWindowState.Normal;
+            if (_settings.WindowState == System.Windows.WindowState.Minimized) _settings.WindowState = System.Windows.WindowState.Normal;
             _settings.Activate();
             return;
         }
-        _settings = new SettingsForm(_cfg, _log, _tray.Icon, cfg =>
+        _settings = new SettingsWindow(_cfg, _log, cfg =>
         {
             cfg.Save(_log);
             Use(cfg);
             _log.Info($"settings saved; mode={_cfg.Mode}, apps=[{string.Join(", ", _cfg.Apps)}]");
-        });
-        _settings.FormClosed += (_, _) => _settings = null;
+        }, InstallUpdateAsync);
+        _settings.Closed += (_, _) => _settings = null;
         _settings.Show();
         _settings.Activate();
     }
@@ -119,7 +191,7 @@ internal sealed class TrayContext : ApplicationContext
     }
 
     /// <summary>Two little monitors with an arrow; grey when paused.</summary>
-    static Icon MakeIcon(bool on)
+    internal static Icon MakeIcon(bool on)
     {
         using var bmp = new Bitmap(32, 32);
         using (var g = Graphics.FromImage(bmp))
@@ -194,29 +266,40 @@ internal static class SelfTest
     public static int SettingsScreenshot(Logger log, string dir)
     {
         Directory.CreateDirectory(dir);
-        void Shot(Form f, string name)
+        void Pump(int ms)
         {
-            f.StartPosition = FormStartPosition.Manual;
-            f.Location = new Point(100, 100);
-            f.TopMost = true;
-            f.Show();
-            for (int i = 0; i < 20; i++) { Application.DoEvents(); Thread.Sleep(15); }
-            f.Refresh();
-            for (int i = 0; i < 20; i++) { Application.DoEvents(); Thread.Sleep(15); }
-            // Real screen capture: DrawToBitmap leaves list views blank.
-            using var bmp = new Bitmap(f.Width, f.Height);
-            using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(f.Location, Point.Empty, f.Size);
+            for (int i = 0; i < ms / 15; i++) { Application.DoEvents(); Thread.Sleep(15); }
+        }
+        void Shot(System.Windows.Window w, string name, Action<System.Windows.Window>? setup = null)
+        {
+            w.WindowStartupLocation = System.Windows.WindowStartupLocation.Manual;
+            w.Left = 60; w.Top = 60;
+            w.Topmost = true;
+            w.Show();
+            setup?.Invoke(w);
+            Pump(700);
+            var h = new System.Windows.Interop.WindowInteropHelper(w).Handle;
+            GetWindowRect(h, out RECT r);
+            using var bmp = new Bitmap(r.Width, r.Height);
+            using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(r.Left, r.Top, 0, 0, new Size(r.Width, r.Height));
             bmp.Save(Path.Combine(dir, name));
-            log.Info($"settings screenshot {name}: {f.Size} at dpi {f.DeviceDpi}");
-            static IEnumerable<Control> All(Control c) => c.Controls.Cast<Control>().SelectMany(x => All(x).Prepend(x));
-            foreach (var lv in All(f).OfType<ListView>())
-                log.Info($"  listview {lv.Bounds} view={lv.View} columns={lv.Columns.Count} items={lv.Items.Count} handle={lv.IsHandleCreated} visible={lv.Visible}");
-            f.Close();
+            log.Info($"settings screenshot {name}: {r}");
+            w.Close();
+            Pump(100);
         }
         var cfg = Config.Load(log);
         cfg.Apps = new() { "chrome.exe", @"C:\Windows\notepad.exe", "Discord.exe" };
-        Shot(new SettingsForm(cfg, log, null, _ => { }), "settings.png");
-        Shot(new RunningAppsDialog(cfg.Apps, null), "running-apps.png");
+        Func<string, Task<string?>> noUpdate = _ => Task.FromResult<string?>(null);
+        Shot(new SettingsWindow(cfg, log, _ => { }, noUpdate), "settings-light.png", w => w.ThemeMode = System.Windows.ThemeMode.Light);
+        Shot(new SettingsWindow(cfg, log, _ => { }, noUpdate), "settings-dark.png", w => w.ThemeMode = System.Windows.ThemeMode.Dark);
+        Shot(new SettingsWindow(cfg, log, _ => { }, noUpdate), "settings-advanced.png", w =>
+        {
+            var s = (SettingsWindow)w;
+            s.AdvancedExpander.IsExpanded = true;
+            Pump(200);
+            s.ContentScroller.ScrollToEnd();
+        });
+        Shot(new RunningAppsWindow(cfg.Apps), "running-apps.png");
         return 0;
     }
 

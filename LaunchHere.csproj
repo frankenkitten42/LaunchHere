@@ -4,16 +4,26 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
+    <!-- WPF for the settings window (Windows 11 Fluent theme); the tray icon stays WinForms. -->
+    <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- Physical pixel coordinates everywhere; required for mixed-DPI monitor setups. -->
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AssemblyName>LaunchHere</AssemblyName>
     <RootNamespace>LaunchHere</RootNamespace>
-    <Version>0.1.2-beta</Version>
+    <Version>0.1.3-beta</Version>
     <!-- Keep the git commit hash out of the product version ("0.1.0-beta", not "0.1.0-beta+<hash>"). -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <!-- WPF0001: ThemeMode (the Fluent theme switch) is marked experimental in .NET 10. -->
+    <NoWarn>$(NoWarn);WPF0001</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- WinForms and WPF share type names (Button, MessageBox...): import WinForms per file instead. -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
 
   <!-- `dotnet publish -c Release` => one standalone LaunchHere.exe (no .NET install needed). -->
   <PropertyGroup>
