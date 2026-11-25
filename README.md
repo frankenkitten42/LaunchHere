@@ -1,6 +1,6 @@
 # LaunchHere
 
-> **⚠️ Beta release (v0.1.1-beta).** LaunchHere works in day-to-day use but is still being tested. Expect rough edges and some apps that don't behave (see [Known limitations](#known-limitations)). Bug reports are welcome. Turn on `DebugLog` and include the relevant lines from `launch-here.log`.
+> **⚠️ Beta release (v0.1.2-beta).** LaunchHere works in day-to-day use but is still being tested. Expect rough edges and some apps that don't behave (see [Known limitations](#known-limitations)). Bug reports are welcome. Turn on `DebugLog` and include the relevant lines from `launch-here.log`.
 
 A small Windows tray app for multi-monitor setups: **apps open on the monitor where you clicked to launch them.**
 
@@ -15,8 +15,10 @@ Windows normally opens a new app window on whatever monitor the app remembers (u
 - **Mixed DPI / different resolutions**: windows too big for the target monitor are shrunk to fit
 - **Apps that restore their own position** (e.g. Chrome) are checked again briefly and put back
 - **Splash screens**: the app's main window that follows a splash screen is moved too
+- **Already-open windows**: click an app's taskbar icon, or one of its window previews, on another monitor's taskbar and that window comes over to that monitor. Maximized and full-screen windows stay that way, and minimized windows are restored straight onto the monitor you clicked. You can turn this off in Settings.
+- **Screen-sized windows** (Chrome opens new windows like this) are maximized on the new monitor instead of being shrunk a little
 
-It deliberately leaves things alone when you click the taskbar button of an app that's **already open**. That click just switches to the existing window, which is not moved.
+For already-open windows, set Windows' **Settings > Personalization > Taskbar > Taskbar behaviors > "Show my taskbar apps on"** to **All taskbars**, so every app's icon appears on every monitor's taskbar.
 
 ## Requirements
 
@@ -36,15 +38,14 @@ Tray icon:
 - **Left-click**: pause / resume (the icon turns grey when paused)
 - **Right-click** for a menu with:
   - **Enabled**: pause / resume
-  - **Start with Windows**: run LaunchHere automatically when you sign in
-  - **Edit settings (config.json)**
-  - **Reload settings**: apply changes without restarting
+  - **Settings...**: the settings window (see below), including **Start with Windows**
+  - **Reload config.json**: apply changes made by hand to `config.json`
   - **Open log**
   - **Exit**
 
 Only one copy runs at a time.
 
-**Start with Windows** adds LaunchHere to your user's startup apps (no admin needed). It starts the exe from wherever it is right now. If you move `LaunchHere.exe` to another folder, turn the option on again from the new location. You can also switch it off in Task Manager > Startup apps.
+**Start with Windows** (in Settings) adds LaunchHere to your user's startup apps (no admin needed). It starts the exe from wherever it is right now. If you move `LaunchHere.exe` to another folder, turn the option on again from the new location. You can also switch it off in Task Manager > Startup apps.
 
 ### Admin (elevated) apps
 
@@ -52,7 +53,16 @@ Windows does not let a normal program move windows that belong to an app running
 
 ## Settings
 
-`config.json` is created with defaults on first run:
+Open **Settings...** from the tray menu. Changes apply as soon as you click **OK** or **Apply**.
+
+- **Apps**: move every app except the ones listed, or only the ones listed. Add apps by picking from the ones running
+  now, browsing for an `.exe`, or typing an exe name. An exe name matches every copy of that app; a full path
+  matches only that copy.
+- **Options**: which launches to watch, bringing open windows to the clicked taskbar, and Start with Windows.
+- **Advanced**: timings, how windows that are too wide get shrunk, and the detailed log.
+
+Everything is stored in `config.json` next to the exe, which you can also edit by hand (then use **Reload config.json**).
+It is created with defaults on first run:
 
 ```json
 {
@@ -60,6 +70,7 @@ Windows does not let a normal program move windows that belong to an app running
   "Apps": [],
   "WatchTaskbar": true,
   "WatchDesktop": true,
+  "MoveOpenWindows": true,
   "ArmTimeoutMs": 8000,
   "SameAppGraceMs": 3000,
   "ActivationCancelMs": 1500,
@@ -75,14 +86,15 @@ Windows does not let a normal program move windows that belong to an app running
 | `Apps` | Exe names (`"chrome.exe"`) or full paths (`"C:\\Games\\foo.exe"`, with doubled backslashes). Not case-sensitive. |
 | `WatchTaskbar` | React to taskbar and jump list clicks. |
 | `WatchDesktop` | React to desktop shortcut double-clicks. |
+| `MoveOpenWindows` | Clicking the taskbar icon or a window preview of an app that is open on another monitor brings that window to the clicked monitor. |
 | `ArmTimeoutMs` | How long to wait for a new window after a click (covers slow-starting apps). |
 | `SameAppGraceMs` | After the first window is moved, further new windows from the same app are moved too for this long (splash screen, then main window). |
-| `ActivationCancelMs` | If an already-open window comes to the front within this time, the click was a switch, not a launch, so stop waiting. |
+| `ActivationCancelMs` | If an already-open window comes to the front within this time, the click was a switch, not a launch: stop waiting for a new window (and, with `MoveOpenWindows`, bring that window over). |
 | `RecheckDelaysMs` | When (ms after the move) to check again for apps that move themselves back. |
 | `VerticalShrinkShare` | When a window is too wide for the target monitor, how much of the width reduction is also applied to the height (0 = keep height, 1 = proportional). |
 | `DebugLog` | Write detailed entries to `launch-here.log`. |
 
-Use **Reload settings** in the tray menu after editing.
+Use **Reload config.json** in the tray menu after editing the file by hand.
 
 ## Known limitations
 

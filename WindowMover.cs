@@ -20,7 +20,17 @@ internal static class WindowMover
         var tgt = MonitorInfo(targetMon);
         double scale = MonitorDpi(targetMon) / (double)MonitorDpi(curMon);
 
-        if (IsZoomed(hwnd))
+        if (IsFullscreen(hwnd, src))
+        {
+            // Full screen (F11 in a browser, borderless games/videos): cover the whole target monitor.
+            if (!PinFullscreen(hwnd, tgt.rcMonitor))
+            {
+                detail = $"SetWindowPos error {Marshal.GetLastWin32Error()} (elevated app? run LaunchHere as admin)";
+                return PlaceResult.Failed;
+            }
+            detail = $"full screen {tgt.rcMonitor}";
+        }
+        else if (IsZoomed(hwnd))
         {
             // Maximized: give it a "normal" rect on the target monitor and re-maximize there.
             var wp = new WINDOWPLACEMENT { length = Marshal.SizeOf<WINDOWPLACEMENT>() };
@@ -89,6 +99,13 @@ internal static class WindowMover
                 Math.Abs(after.Width - mapped.Width) > 1 || Math.Abs(after.Height - mapped.Height) > 1)
                 SetWindowPos(hwnd, IntPtr.Zero, mapped.Left, mapped.Top, mapped.Width, mapped.Height, flags);
             detail = $"{r} -> {mapped}";
+            // A normal window as big as the screen (Chrome opens new windows like this) is meant to be
+            // maximized: maximize it on the target instead of leaving it a bit smaller.
+            if (NearFull(r, src.rcWork) && MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) == targetMon)
+            {
+                MaximizeHere(hwnd, tgt);
+                detail += IsZoomed(hwnd) ? ", maximized (was screen-sized)" : ", maximize failed";
+            }
         }
 
         if (MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) != targetMon)
@@ -104,6 +121,7 @@ internal static class WindowMover
     {
         if (IsIconic(hwnd) || IsZoomed(hwnd)) return false;
         if (MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) != targetMon) return false;
+        if (IsFullscreen(hwnd, MonitorInfo(targetMon))) return false;   // meant to cover the taskbar
         GetWindowRect(hwnd, out RECT r);
         RECT w = MonitorInfo(targetMon).rcWork;
         int width = Math.Min(r.Width, w.Width), height = Math.Min(r.Height, w.Height);
@@ -113,6 +131,105 @@ internal static class WindowMover
         return SetWindowPos(hwnd, IntPtr.Zero, left, top, width, height,
             SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
     }
+
+    /// <summary>Covers (nearly) the whole work area: 95%+ of its width and height.</summary>
+    static bool NearFull(RECT r, RECT work) =>
+        r.Width >= work.Width * 0.95 && r.Height >= work.Height * 0.95;
+
+    /// <summary>Maximize a window already on this monitor, with a sensible restore-down rect
+    /// (75% of the work area, centered) instead of the screen-sized one.</summary>
+    static void MaximizeHere(IntPtr hwnd, MONITORINFOEX mon)
+    {
+        RECT w = mon.rcWork;
+        int nw = w.Width * 3 / 4, nh = w.Height * 3 / 4;
+        var normal = new RECT(w.Left + (w.Width - nw) / 2, w.Top + (w.Height - nh) / 2,
+                              w.Left + (w.Width - nw) / 2 + nw, w.Top + (w.Height - nh) / 2 + nh);
+        var wp = new WINDOWPLACEMENT { length = Marshal.SizeOf<WINDOWPLACEMENT>() };
+        GetWindowPlacement(hwnd, ref wp);
+        wp.rcNormalPosition = ScreenToWorkspace(normal, mon);
+        wp.showCmd = SW_SHOWMAXIMIZED;
+        wp.flags = 0;
+        SetWindowPlacement(hwnd, ref wp);
+        if (!IsZoomed(hwnd)) ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+    }
+
+    /// <summary>A screen-sized normal window that is already on the right monitor: maximize it.</summary>
+    public static bool MaximizeIfScreenSized(IntPtr hwnd, IntPtr mon)
+    {
+        if (IsIconic(hwnd) || IsZoomed(hwnd)) return false;
+        if (MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) != mon) return false;
+        var m = MonitorInfo(mon);
+        if (IsFullscreen(hwnd, m)) return false;
+        GetWindowRect(hwnd, out RECT r);
+        if (!NearFull(r, m.rcWork)) return false;
+        MaximizeHere(hwnd, m);
+        return IsZoomed(hwnd);
+    }
+
+    /// <summary>Restore a minimized window straight onto the target monitor (maximized again if it
+    /// was), by moving its saved restore rect there first, so it never flashes on the old monitor.</summary>
+    public static bool RestoreOnto(IntPtr hwnd, IntPtr targetMon, out string detail)
+    {
+        var wp = new WINDOWPLACEMENT { length = Marshal.SizeOf<WINDOWPLACEMENT>() };
+        GetWindowPlacement(hwnd, ref wp);
+        IntPtr curMon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        var src = MonitorInfo(curMon);
+        var tgt = MonitorInfo(targetMon);
+        double scale = MonitorDpi(targetMon) / (double)MonitorDpi(curMon);
+        bool max = (wp.flags & WPF_RESTORETOMAXIMIZED) != 0;
+        RECT normal = WorkspaceToScreen(wp.rcNormalPosition, src);
+        RECT mapped = MapRect(normal, src.rcWork, tgt.rcWork, scale);
+        if (!max && NearFull(normal, src.rcWork))
+        {
+            // Screen-sized normal window: bring it back maximized, with a 75% restore-down size.
+            max = true;
+            RECT w = tgt.rcWork;
+            int nw = w.Width * 3 / 4, nh = w.Height * 3 / 4;
+            mapped = new RECT(w.Left + (w.Width - nw) / 2, w.Top + (w.Height - nh) / 2,
+                              w.Left + (w.Width - nw) / 2 + nw, w.Top + (w.Height - nh) / 2 + nh);
+        }
+        wp.rcNormalPosition = ScreenToWorkspace(mapped, tgt);
+        wp.showCmd = max ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
+        wp.flags = 0;
+        bool ok = SetWindowPlacement(hwnd, ref wp);
+        if (ok && !max)
+        {
+            // The DPI change on restore can leave the app at a size of its own choosing; pin it.
+            GetWindowRect(hwnd, out RECT after);
+            if (!Same(after, mapped))
+                SetWindowPos(hwnd, IntPtr.Zero, mapped.Left, mapped.Top, mapped.Width, mapped.Height,
+                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+        }
+        detail = ok ? (max ? "maximized" : $"{normal} -> {mapped}") : $"SetWindowPlacement error {Marshal.GetLastWin32Error()}";
+        return ok && !IsIconic(hwnd);
+    }
+
+    /// <summary>Not maximized, but covering the whole monitor (taskbar included).</summary>
+    public static bool IsFullscreen(IntPtr hwnd, MONITORINFOEX mon)
+    {
+        if (IsIconic(hwnd) || IsZoomed(hwnd)) return false;
+        GetWindowRect(hwnd, out RECT r);
+        return Same(r, mon.rcMonitor);
+    }
+
+    /// <summary>Size a full-screen window to exactly cover this monitor rect. Moving to a monitor
+    /// with another DPI makes the app propose its own size, so check and set it again.</summary>
+    public static bool PinFullscreen(IntPtr hwnd, RECT m)
+    {
+        const uint flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER;
+        for (int i = 0; i < 3; i++)
+        {
+            GetWindowRect(hwnd, out RECT r);
+            if (Same(r, m)) return true;
+            if (!SetWindowPos(hwnd, IntPtr.Zero, m.Left, m.Top, m.Width, m.Height, flags)) return false;
+        }
+        GetWindowRect(hwnd, out RECT final);
+        return Same(final, m);
+    }
+
+    static bool Same(RECT a, RECT b) =>
+        Math.Abs(a.Left - b.Left) <= 1 && Math.Abs(a.Top - b.Top) <= 1 &&
+        Math.Abs(a.Right - b.Right) <= 1 && Math.Abs(a.Bottom - b.Bottom) <= 1;
 
     /// <summary>How much of a forced width reduction is also applied to the height (0 = none,
     /// 1 = proportional). Set from config.</summary>

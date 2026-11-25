@@ -18,17 +18,19 @@ internal sealed class Tracker : IDisposable
         public required string Source;
         public required long StartMs;
         public long ExpiresMs;
-        public int? Pid;               // set once the launched app's first window is claimed
+        public required bool FromTaskbar;    // a switch to an open window may move it (MoveOpenWindows)
+        public required IntPtr PrevForeground; // window in front when the click started
+        public int? Pid;              // set once the launched app's first window is claimed
     }
 
-    static readonly HashSet<string> ShellClasses = new(StringComparer.OrdinalIgnoreCase)
+    internal static readonly HashSet<string> ShellClasses = new(StringComparer.OrdinalIgnoreCase)
     {
         "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW", "NotifyIconOverflowWindow",
         "TaskListThumbnailWnd", "Windows.UI.Core.CoreWindow", "XamlExplorerHostIslandWindow",
         "TopLevelWindowForOverflowXamlIsland", "ForegroundStaging", "MultitaskingViewFrame", "#32768",
     };
 
-    static readonly HashSet<string> ShellProcesses = new(StringComparer.OrdinalIgnoreCase)
+    internal static readonly HashSet<string> ShellProcesses = new(StringComparer.OrdinalIgnoreCase)
     {
         "StartMenuExperienceHost.exe", "SearchHost.exe", "SearchApp.exe", "ShellExperienceHost.exe",
         "ShellHost.exe", "TextInputHost.exe", "LockApp.exe", "PeopleExperienceHost.exe",
@@ -52,6 +54,13 @@ internal sealed class Tracker : IDisposable
     POINT _jumpListPt;                             // last taskbar right-click
     long _jumpListUntil;                           // jump-list click accepted until this time
     long _clickSerial;                           // bumps on every left click; cancels re-checks
+    IntPtr _fgAtDown;                            // foreground window at the last left press
+
+    // Taskbar flyouts: the thumbnail previews shown when an app has several windows.
+    static readonly HashSet<string> FlyoutClasses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "XamlExplorerHostIslandWindow", "TaskListThumbnailWnd",
+    };
 
     public bool Enabled { get; set; } = true;
 
@@ -93,7 +102,11 @@ internal sealed class Tracker : IDisposable
 
     void OnClick(int msg, MSLLHOOKSTRUCT info)
     {
-        if (msg == WM_LBUTTONDOWN) _clickSerial++;
+        if (msg == WM_LBUTTONDOWN)
+        {
+            _clickSerial++;
+            _fgAtDown = GetForegroundWindow();   // before the click itself changes it
+        }
 
         IntPtr hit = WindowFromPoint(info.pt);
         if (hit == IntPtr.Zero) return;
@@ -133,6 +146,14 @@ internal sealed class Tracker : IDisposable
                 _log.Info($"click after taskbar right-click: [{rootClass}] {proc} -> {(shellUi ? "jump list item" : "not a jump list")}");
                 if (shellUi) ArmAt(_jumpListPt, "taskbar jump list");
             }
+            else if (msg == WM_LBUTTONUP && FlyoutClasses.Contains(rootClass)
+                     && (_arm is { FromTaskbar: true } || NearTaskbar(info.pt)))
+            {
+                // Picked one window from the thumbnail previews of a taskbar icon. The previews also
+                // open on hover alone, so the icon need not have been clicked first.
+                ArmAt(info.pt, "taskbar thumbnail");
+                _ = ThumbnailCheckAsync(_arm!);
+            }
             return;
         }
 
@@ -159,6 +180,20 @@ internal sealed class Tracker : IDisposable
         }
     }
 
+    /// <summary>Is the point close to its monitor's taskbar (where the thumbnail previews open)?
+    /// Within a quarter of the monitor's size from the taskbar edge.</summary>
+    static bool NearTaskbar(POINT pt)
+    {
+        var m = MonitorInfo(MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST));
+        RECT mon = m.rcMonitor, work = m.rcWork;
+        int reachY = mon.Height / 4, reachX = mon.Width / 4;
+        if (work.Bottom < mon.Bottom) return work.Bottom - pt.Y <= reachY;   // taskbar at the bottom
+        if (work.Top > mon.Top) return pt.Y - work.Top <= reachY;            // top
+        if (work.Left > mon.Left) return pt.X - work.Left <= reachX;         // left
+        if (work.Right < mon.Right) return work.Right - pt.X <= reachX;      // right
+        return mon.Bottom - pt.Y <= reachY;                                  // auto-hidden: assume bottom
+    }
+
     void ArmAt(POINT pt, string source)
     {
         IntPtr mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
@@ -170,6 +205,8 @@ internal sealed class Tracker : IDisposable
             Source = source,
             StartMs = now,
             ExpiresMs = now + _cfg.ArmTimeoutMs,
+            FromTaskbar = source.Contains("taskbar"),
+            PrevForeground = _fgAtDown,
         };
         _handled.Clear();
         _newWindows.Clear();
@@ -200,14 +237,106 @@ internal sealed class Tracker : IDisposable
         catch (Exception ex) { _log.Error($"window handler: {ex}"); }
     }
 
-    /// <summary>The click brought an already-open window to the front: it was a switch, not a launch.</summary>
+    /// <summary>The click brought an already-open window to the front: it was a switch, not a launch.
+    /// With MoveOpenWindows, a taskbar switch brings that window over to the clicked monitor.</summary>
     void OnForeground(IntPtr hwnd, Arm arm, long now)
     {
         if (arm.Pid != null || now - arm.StartMs > _cfg.ActivationCancelMs) return;
         if (_newWindows.Contains(hwnd)) return;
-        if (!IsCandidate(hwnd, out _, out string exePath, out _)) return;
-        _log.Info($"disarmed: click switched to already-open {Path.GetFileName(exePath)} \"{TitleOf(hwnd)}\"");
+        HandleSwitch(hwnd, arm, now);
+    }
+
+    /// <summary>Hovering a thumbnail preview can already bring its window to the front, so the
+    /// click itself changes nothing and no foreground event comes. Check what is in front.</summary>
+    async Task ThumbnailCheckAsync(Arm arm)
+    {
+        foreach (int delay in new[] { 150, 250 })
+        {
+            await Task.Delay(delay);
+            if (_arm != arm || !Enabled) return;        // handled by a foreground event, or re-armed
+            IntPtr fg = GetForegroundWindow();
+            if (fg == IntPtr.Zero || _newWindows.Contains(fg)) continue;
+            if (ShellClasses.Contains(ClassOf(fg))) continue;
+            _log.Info($"  thumbnail click: no switch event, using the window in front");
+            HandleSwitch(fg, arm, _clock.ElapsedMilliseconds);
+            return;
+        }
+    }
+
+    void HandleSwitch(IntPtr hwnd, Arm arm, long now)
+    {
+        string exePath, cls = ClassOf(hwnd);
+        // A minimized window is still parked off-screen at a tiny size when it comes to the front.
+        if (IsIconic(hwnd) ? !IsCandidateMinimized(hwnd, out exePath) : !IsCandidate(hwnd, out _, out exePath, out cls)) return;
         _arm = null;
+        string exe = Path.GetFileName(exePath);
+        if (!_cfg.MoveOpenWindows || !arm.FromTaskbar)
+        {
+            _log.Info($"disarmed: click switched to already-open {exe} \"{TitleOf(hwnd)}\"");
+            return;
+        }
+        if (!_cfg.Allows(exePath))
+        {
+            _log.Info($"switched to already-open {exe}: not allowed by {_cfg.Mode}, left alone");
+            return;
+        }
+        _ = MoveOpenAsync(hwnd, arm, exe, cls, now - arm.StartMs);
+    }
+
+    async Task MoveOpenAsync(IntPtr hwnd, Arm arm, string exe, string cls, long at)
+    {
+        // Restoring from minimized: put it straight onto the clicked monitor so it doesn't
+        // pop up on the old one first.
+        if (IsIconic(hwnd) && MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) != arm.Monitor)
+        {
+            var msw = Stopwatch.StartNew();
+            bool ok = WindowMover.RestoreOnto(hwnd, arm.Monitor, out string mdetail);
+            var fix = ok ? WindowMover.Place(hwnd, arm.Monitor, out _) : PlaceResult.Failed;
+            _log.Info($"+{at} ms  switched to minimized {exe} [{cls}] \"{TitleOf(hwnd)}\": restored here " +
+                      $"{(ok ? "ok" : "FAILED")} {mdetail}, then {fix} ({msw.Elapsed.TotalMilliseconds:F1} ms)");
+            if (ok) _ = RecheckAsync(hwnd, arm, exe);
+            return;
+        }
+
+        // Give a restore-from-minimized (or a minimize) a moment to take effect.
+        for (int i = 0; i < 10; i++)
+        {
+            await Task.Delay(i == 0 ? 30 : 50);
+            if (!IsWindow(hwnd)) return;
+            // Clicking the icon of the window in front minimizes it, and Windows brings the next
+            // window forward. That one wasn't clicked; leave it where it is.
+            IntPtr prev = arm.PrevForeground;
+            if (prev != IntPtr.Zero && prev != hwnd && IsIconic(prev))
+            {
+                // If the minimized window lives on another monitor, the user clicked its icon on this
+                // taskbar to bring it here: restore it on the clicked monitor instead.
+                if (MonitorFromWindow(prev, MONITOR_DEFAULTTONEAREST) != arm.Monitor
+                    && IsCandidateMinimized(prev, out string pexe) && _cfg.Allows(pexe))
+                {
+                    var psw = Stopwatch.StartNew();
+                    bool ok = WindowMover.RestoreOnto(prev, arm.Monitor, out string pdetail);
+                    var r2 = ok ? WindowMover.Place(prev, arm.Monitor, out string fix) : PlaceResult.Failed;
+                    bool front = SetForegroundWindow(prev);
+                    _log.Info($"+{at} ms  click minimized open {Path.GetFileName(pexe)} \"{TitleOf(prev)}\" on another monitor: " +
+                              $"restored here {(ok ? "ok" : "FAILED")} {pdetail}, then {r2}, foreground={front} ({psw.Elapsed.TotalMilliseconds:F1} ms)");
+                    if (ok) _ = RecheckAsync(prev, arm, Path.GetFileName(pexe));
+                    return;
+                }
+                _log.Info($"click minimized \"{TitleOf(prev)}\"; not moving {exe} \"{TitleOf(hwnd)}\"");
+                return;
+            }
+            if (!IsIconic(hwnd)) break;
+        }
+
+        var sw = Stopwatch.StartNew();
+        var result = WindowMover.Place(hwnd, arm.Monitor, out string detail);
+        if (result == PlaceResult.AlreadyThere)
+        {
+            _log.Info($"disarmed: click switched to already-open {exe} \"{TitleOf(hwnd)}\" (already on {arm.MonitorName})");
+            return;
+        }
+        _log.Info($"+{at} ms  switched to open {exe} [{cls}] \"{TitleOf(hwnd)}\": {result} {detail} ({sw.Elapsed.TotalMilliseconds:F1} ms)");
+        if (result == PlaceResult.Moved) _ = RecheckAsync(hwnd, arm, exe);
     }
 
     void OnWindowShown(IntPtr hwnd, Arm arm, long now)
@@ -249,6 +378,8 @@ internal sealed class Tracker : IDisposable
     {
         long serial = _clickSerial;
         int elapsed = 0;
+        var tgt = MonitorInfo(arm.Monitor);
+        bool fullscreen = WindowMover.IsFullscreen(hwnd, tgt);
         foreach (int at in _cfg.RecheckDelaysMs)
         {
             await Task.Delay(Math.Max(0, at - elapsed));
@@ -256,14 +387,41 @@ internal sealed class Tracker : IDisposable
             if (!IsWindow(hwnd) || !IsWindowVisible(hwnd)) return;
             if (_clickSerial != serial || (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0) return;
 
+            // A full-screen app may re-size itself after the DPI change; keep it covering the monitor.
+            if (fullscreen && !IsZoomed(hwnd) && !WindowMover.IsFullscreen(hwnd, tgt)
+                && MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) == arm.Monitor)
+            {
+                WindowMover.PinFullscreen(hwnd, tgt.rcMonitor);
+                _log.Info($"  re-check +{at} ms: {exe} re-fitted to full screen");
+                continue;
+            }
+
             var result = WindowMover.Place(hwnd, arm.Monitor, out string detail);
             if (result == PlaceResult.Moved)
                 _log.Info($"  re-check +{at} ms: {exe} moved itself away, moved back {detail}");
             else if (result == PlaceResult.Failed)
                 _log.Info($"  re-check +{at} ms: {exe} move failed {detail}");
-            if (WindowMover.ClampToWorkArea(hwnd, arm.Monitor))
+            if (WindowMover.MaximizeIfScreenSized(hwnd, arm.Monitor))
+                _log.Info($"  re-check +{at} ms: {exe} was screen-sized, maximized");
+            else if (WindowMover.ClampToWorkArea(hwnd, arm.Monitor))
                 _log.Info($"  re-check +{at} ms: {exe} fitted inside work area");
         }
+    }
+
+    /// <summary>IsCandidate for a minimized window (its rect is tiny/off-screen while minimized).</summary>
+    bool IsCandidateMinimized(IntPtr hwnd, out string exePath)
+    {
+        exePath = "";
+        if (GetAncestor(hwnd, GA_ROOT) != hwnd || GetWindow(hwnd, GW_OWNER) != IntPtr.Zero) return false;
+        if ((ExStyle(hwnd) & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) != 0) return false;
+        if (ShellClasses.Contains(ClassOf(hwnd))) return false;
+        GetWindowThreadProcessId(hwnd, out uint upid);
+        if ((int)upid == _ownPid) return false;
+        exePath = ProcessPath(upid);
+        string name = Path.GetFileName(exePath);
+        if (ShellProcesses.Contains(name)) return false;
+        if (name.Equals("explorer.exe", StringComparison.OrdinalIgnoreCase) && ClassOf(hwnd) != "CabinetWClass") return false;
+        return exePath != "";
     }
 
     bool IsCandidate(IntPtr hwnd, out int pid, out string exePath, out string cls) =>

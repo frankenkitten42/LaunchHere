@@ -28,6 +28,10 @@ public sealed class Config
     /// the click just switched to a running app - stop waiting for a new window.</summary>
     public int ActivationCancelMs { get; set; } = 1500;
 
+    /// <summary>Clicking a taskbar icon (or its thumbnail) of a window that is open on another monitor
+    /// moves that window to the clicked taskbar's monitor, keeping it maximized / full screen.</summary>
+    public bool MoveOpenWindows { get; set; } = true;
+
     /// <summary>Times (ms after the first move) to re-check apps that restore their own position.</summary>
     public List<int> RecheckDelaysMs { get; set; } = new() { 50, 150, 400, 1000, 2000 };
 
@@ -55,6 +59,9 @@ public sealed class Config
         AllowTrailingCommas = true,
         Converters = { new JsonStringEnumConverter() },
     };
+
+    /// <summary>Deep copy, for editing in the settings window without touching the live config.</summary>
+    public Config Clone() => JsonSerializer.Deserialize<Config>(JsonSerializer.Serialize(this, Json), Json)!;
 
     public static string FilePath => Path.Combine(AppContext.BaseDirectory, "config.json");
 
