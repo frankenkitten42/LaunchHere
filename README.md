@@ -6,6 +6,8 @@ A small Windows tray app for multi-monitor setups: **apps open on the monitor wh
 
 Windows normally opens a new app window on whatever monitor the app remembers (usually your primary one), even if you clicked its icon on the taskbar of your second monitor. LaunchHere notices which monitor the click happened on and moves the new window there, typically within a few milliseconds of it appearing.
 
+**[⬇️ Download LaunchHere.exe](https://github.com/frankenkitten42/LaunchHere/releases)** from the Releases page (under **Assets** of the newest release).
+
 ## What it handles
 
 - **Taskbar clicks** on the main taskbar and on the taskbars of other monitors
@@ -29,7 +31,7 @@ The released `LaunchHere.exe` is self-contained (about 75 MB), so .NET does not 
 
 ## Usage
 
-1. Put `LaunchHere.exe` in a folder of its own (it writes `config.json` and `launch-here.log` next to itself).
+1. [Download `LaunchHere.exe`](https://github.com/frankenkitten42/LaunchHere/releases) and put it in a folder of its own (it writes `config.json` and `launch-here.log` next to itself).
 2. Run it. A small icon with two monitors appears in the notification area (system tray).
 3. Launch apps from any monitor's taskbar or desktop as usual.
 
