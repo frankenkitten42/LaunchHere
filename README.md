@@ -1,6 +1,6 @@
 # LaunchHere
 
-> **⚠️ Beta release (v0.1.3-beta).** LaunchHere works in day-to-day use but is still being tested. Expect rough edges and some apps that don't behave (see [Known limitations](#known-limitations)). Bug reports are welcome. Turn on **Detailed log** (Settings > Advanced) and include the relevant lines from `launch-here.log`.
+> **⚠️ Beta release (v0.2.1-beta).** LaunchHere works in day-to-day use but is still being tested. Expect rough edges and some apps that don't behave (see [Known limitations](#known-limitations)). Bug reports are welcome: use **Report a problem...** in the tray menu (see [Reporting a problem](#reporting-a-problem)).
 
 A small Windows tray app for multi-monitor setups: **apps open on the monitor where you clicked to launch them.**
 
@@ -27,7 +27,7 @@ For already-open windows, set Windows' **Settings > Personalization > Taskbar > 
 - Windows 10 or 11, x64
 - Two or more monitors (it does nothing useful with one)
 
-The released `LaunchHere.exe` is self-contained (about 75 MB), so .NET does not need to be installed.
+The released `LaunchHere.exe` is self-contained (about 165 MB), so .NET does not need to be installed. It is a big file because it carries its own copy of .NET, stored uncompressed so that it uses less memory while running (about 12 MB when idle).
 
 ## Usage
 
@@ -43,11 +43,21 @@ Tray icon:
   - **Settings...**: the settings window (see below), including **Start with Windows**
   - **Reload config.json**: apply changes made by hand to `config.json`
   - **Open log**
+  - **Report a problem...**: see [Reporting a problem](#reporting-a-problem)
   - **Exit**
 
 Only one copy runs at a time.
 
 **Start with Windows** (in Settings) adds LaunchHere to your user's startup apps (no admin needed). It starts the exe from wherever it is right now. If you move `LaunchHere.exe` to another folder, turn the option on again from the new location. You can also switch it off in Task Manager > Startup apps.
+
+### Reporting a problem
+
+**Report a problem...** (tray menu, or Settings > Troubleshooting) opens a window with a report you can check and edit: your LaunchHere and Windows versions, monitor layout, settings and the last 50 lines of `launch-here.log`. Window titles are hidden unless you untick **Hide window titles**, and your Windows user name is taken out of file paths.
+
+- **Open GitHub issue** opens a new issue on GitHub in your browser with the report filled in. Nothing is sent until you press **Create** there (you need a free GitHub account). Issues are public. If the report is too long to fill in automatically, the details are copied to your clipboard so you can paste them in.
+- **Copy to clipboard** copies the report instead.
+
+With verbose logging off, the log only has the basics. For a more useful report, press **Turn on verbose logging**, make the problem happen again, then press **Refresh**.
 
 ### Admin (elevated) apps
 
@@ -61,10 +71,13 @@ Open **Settings...** from the tray menu. Changes apply as soon as you click **OK
   now, browsing for an `.exe`, or typing an exe name. An exe name matches every copy of that app; a full path
   matches only that copy.
 - **Behavior**: which launches to watch, bringing open windows to the clicked taskbar, and Start with Windows.
+- **Advanced**: timings, and how windows that are too wide get shrunk.
+- **Troubleshooting**: **Verbose logging** (off by default) writes every window LaunchHere looks at to
+  `launch-here.log`. Start, settings changes, updates and errors are always logged. **Report a problem...** is here too.
 - **Updates**: **Check for updates** looks for a newer release on GitHub. **Update now** downloads it, checks it
-  against the release's SHA-256 checksum, replaces `LaunchHere.exe` and restarts. If the new version fails to start,
+  against the release's SHA-256 checksum and the developer's signature (an update that isn't signed with the LaunchHere
+  release key is refused), replaces `LaunchHere.exe` and restarts. If the new version fails to start,
   the current one is put back. Your settings and Start with Windows are kept.
-- **Advanced**: timings, how windows that are too wide get shrunk, and the detailed log.
 
 The settings window follows Windows' light/dark mode and accent colour.
 
@@ -82,7 +95,7 @@ It is created with defaults on first run:
   "SameAppGraceMs": 3000,
   "ActivationCancelMs": 1500,
   "RecheckDelaysMs": [50, 150, 400, 1000, 2000],
-  "DebugLog": true,
+  "VerboseLog": false,
   "VerticalShrinkShare": 0.2
 }
 ```
@@ -99,7 +112,7 @@ It is created with defaults on first run:
 | `ActivationCancelMs` | If an already-open window comes to the front within this time, the click was a switch, not a launch: stop waiting for a new window (and, with `MoveOpenWindows`, bring that window over). |
 | `RecheckDelaysMs` | When (ms after the move) to check again for apps that move themselves back. |
 | `VerticalShrinkShare` | When a window is too wide for the target monitor, how much of the width reduction is also applied to the height (0 = keep height, 1 = proportional). |
-| `DebugLog` | Write detailed entries to `launch-here.log`. |
+| `VerboseLog` | Write every window LaunchHere looks at to `launch-here.log` (replaces `DebugLog` from 0.1.3 and earlier). |
 
 Use **Reload config.json** in the tray menu after editing the file by hand.
 
@@ -118,7 +131,7 @@ Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
 dotnet publish -c Release
 ```
 
-This produces a single standalone `dist\LaunchHere.exe` (about 50 MB, as the .NET runtime is bundled).
+This produces a single standalone `dist\LaunchHere.exe` (about 165 MB, as the .NET runtime is bundled, uncompressed to save memory).
 
 To check that window moves work on your monitors, run the self-test (needs two or more monitors). It writes results to `launch-here.log` and exits with code 0 if everything passed:
 

@@ -12,11 +12,17 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AssemblyName>LaunchHere</AssemblyName>
     <RootNamespace>LaunchHere</RootNamespace>
-    <Version>0.1.3-beta</Version>
+    <Version>0.2.1-beta</Version>
     <!-- Keep the git commit hash out of the product version ("0.1.0-beta", not "0.1.0-beta+<hash>"). -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <!-- WPF0001: ThemeMode (the Fluent theme switch) is marked experimental in .NET 10. -->
     <NoWarn>$(NoWarn);WPF0001</NoWarn>
+  </PropertyGroup>
+
+  <!-- Test builds: `dotnet publish -c Release -p:TestHooks=true -o DIR` adds the arm-test and update-now switches
+       and the LAUNCHHERE_UPDATE_FEED / LAUNCHHERE_UPDATE_PUBKEY overrides. Never ship one. -->
+  <PropertyGroup Condition="'$(TestHooks)' == 'true'">
+    <DefineConstants>$(DefineConstants);TEST_HOOKS</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -30,7 +36,10 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
-    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- Uncompressed on purpose: Windows then maps the bundled code straight from the exe instead of unpacking a
+         private copy into memory (measured 2026-11-26: idle 50 -> 12 MB committed, after Settings 132 -> 55 MB).
+         Costs download size: ~165 MB instead of ~72 MB. -->
+    <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <DebugType>embedded</DebugType>
     <PublishDir>dist\</PublishDir>

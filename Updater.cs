@@ -7,19 +7,42 @@ using System.Text.Json;
 namespace LaunchHere;
 
 /// <summary>A release on GitHub that is newer than the running version.</summary>
-internal sealed record UpdateInfo(string Version, string Tag, string PageUrl, string Notes, string ExeUrl, string ShaUrl);
+internal sealed record UpdateInfo(string Version, string Tag, string PageUrl, string Notes, string ExeUrl, string ShaUrl, string SigUrl);
 
 /// <summary>Checks GitHub Releases for a newer version and installs it in place: download, verify the
-/// SHA-256 against the release's .sha256 file, swap the exe, restart. The exe path stays the same, so
+/// SHA-256 against the release's .sha256 file and the ECDSA signature in its .sig file (made with the
+/// developer's private key, which is never on GitHub: see tools/sign-release.ps1), swap the exe, restart. The exe path stays the same, so
 /// Start with Windows keeps working.</summary>
 internal static class Updater
 {
     const string ReleasesUrl = "https://api.github.com/repos/frankenkitten42/LaunchHere/releases";
     const string ExeAsset = "LaunchHere.exe";
     const string ShaAsset = "LaunchHere.exe.sha256";
+    const string SigAsset = "LaunchHere.exe.sig";
 
-    /// <summary>Test hook: point the check at another releases feed (same JSON shape as GitHub's).</summary>
+    /// <summary>Release downloads must come from this repo's GitHub releases, over HTTPS.</summary>
+    const string DownloadPrefix = "https://github.com/frankenkitten42/LaunchHere/releases/download/";
+
+    /// <summary>Public half of the release signing key (ECDSA P-256). An update is installed only if its
+    /// .sig verifies against this, so a release uploaded by someone without the private key is refused.</summary>
+    const string PublicKeyPem = """
+        -----BEGIN PUBLIC KEY-----
+        MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAESaFCL4spk2SMycw5LlvOmCxfuWrL
+        /HA3SreEsVqHkc5M8BvP67JLGtwF9HXqPelEHGxyM1Un+P5bKlHIg6LPLw==
+        -----END PUBLIC KEY-----
+        """;
+
+#if TEST_HOOKS
+    // Test builds only (dotnet publish -p:TestHooks=true): a local feed, a test key, and localhost downloads.
     static string FeedUrl => Environment.GetEnvironmentVariable("LAUNCHHERE_UPDATE_FEED") is { Length: > 0 } u ? u : ReleasesUrl;
+    static string PublicKey => Environment.GetEnvironmentVariable("LAUNCHHERE_UPDATE_PUBKEY") is { Length: > 0 } k ? File.ReadAllText(k) : PublicKeyPem;
+    static bool AllowedUrl(string url) => url.StartsWith(DownloadPrefix, StringComparison.Ordinal)
+        || url.StartsWith("http://localhost:", StringComparison.Ordinal) || url.StartsWith("http://127.0.0.1:", StringComparison.Ordinal);
+#else
+    const string FeedUrl = ReleasesUrl;
+    const string PublicKey = PublicKeyPem;
+    static bool AllowedUrl(string url) => url.StartsWith(DownloadPrefix, StringComparison.Ordinal);
+#endif
 
     public static string CurrentVersion =>
         Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
@@ -34,7 +57,8 @@ internal static class Updater
         return http;
     }
 
-    /// <summary>The newest release that is newer than this version and has both assets, or null.
+    /// <summary>The newest release that is newer than this version and has all three assets (exe, .sha256,
+    /// .sig) at allowed URLs, or null.
     /// Pre-releases count (every release is a beta for now); drafts don't.</summary>
     public static async Task<UpdateInfo?> CheckAsync(CancellationToken ct = default)
     {
@@ -51,17 +75,19 @@ internal static class Updater
             if (Compare(version, CurrentVersion) <= 0) continue;
             if (best != null && Compare(version, best.Version) <= 0) continue;
 
-            string exe = "", sha = "";
+            string exe = "", sha = "", sig = "";
             foreach (var a in r.GetProperty("assets").EnumerateArray())
             {
                 string name = a.GetProperty("name").GetString() ?? "";
                 string url = a.GetProperty("browser_download_url").GetString() ?? "";
                 if (name.Equals(ExeAsset, StringComparison.OrdinalIgnoreCase)) exe = url;
                 else if (name.Equals(ShaAsset, StringComparison.OrdinalIgnoreCase)) sha = url;
+                else if (name.Equals(SigAsset, StringComparison.OrdinalIgnoreCase)) sig = url;
             }
-            if (exe == "" || sha == "") continue;   // can't verify it: don't offer it
+            // Can't verify it, or it would download from somewhere else: don't offer it.
+            if (!AllowedUrl(exe) || !AllowedUrl(sha) || !AllowedUrl(sig)) continue;
             best = new UpdateInfo(version, tag, r.GetProperty("html_url").GetString() ?? "",
-                r.TryGetProperty("body", out var b) ? b.GetString() ?? "" : "", exe, sha);
+                r.TryGetProperty("body", out var b) ? b.GetString() ?? "" : "", exe, sha, sig);
         }
         return best;
     }
@@ -93,7 +119,7 @@ internal static class Updater
     static string NewPath => ExePath + ".new";
     public static string OldPath => ExePath + ".old";
 
-    /// <summary>Download the update next to the running exe (as .new) and check its SHA-256.
+    /// <summary>Download the update next to the running exe (as .new) and check its SHA-256 and signature.
     /// Returns the path of the verified file; throws with a readable message otherwise.</summary>
     public static async Task<string> DownloadAsync(UpdateInfo info, IProgress<double>? progress, CancellationToken ct = default)
     {
@@ -101,6 +127,9 @@ internal static class Updater
         string shaText = await http.GetStringAsync(info.ShaUrl, ct);
         string expected = shaText.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
         if (expected.Length != 64) throw new InvalidDataException("The release's checksum file is not valid.");
+        byte[] signature;
+        try { signature = Convert.FromBase64String((await http.GetStringAsync(info.SigUrl, ct)).Trim()); }
+        catch (FormatException) { throw new InvalidDataException("The release's signature file is not valid. Nothing was changed."); }
 
         string target = NewPath;
         try
@@ -121,11 +150,18 @@ internal static class Updater
                     if (total > 0) progress?.Report((double)done / total);
                 }
             }
-            string actual;
+            byte[] hash;
             await using (var f = File.OpenRead(target))
-                actual = Convert.ToHexString(await SHA256.HashDataAsync(f, ct));
+                hash = await SHA256.HashDataAsync(f, ct);
+            string actual = Convert.ToHexString(hash);
             if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException($"The download doesn't match the release's checksum (expected {expected[..12]}..., got {actual[..12]}...). Nothing was changed.");
+            using (var ec = ECDsa.Create())
+            {
+                ec.ImportFromPem(PublicKey);
+                if (!ec.VerifyHash(hash, signature))
+                    throw new InvalidDataException("The download isn't signed by the LaunchHere developer, so it was not installed. Nothing was changed.");
+            }
             return target;
         }
         catch
@@ -162,7 +198,7 @@ internal static class Updater
         try
         {
             p = Process.Start(new ProcessStartInfo(exe, "--after-update") { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(exe)! });
-            log.Info($"update: started new version, pid {p?.Id}");
+            log.Always($"update: started new version, pid {p?.Id}");
             // Wait for the "I'm running" signal (or for it to die).
             var sw = Stopwatch.StartNew();
             while (sw.Elapsed < TimeSpan.FromSeconds(20))
@@ -203,7 +239,7 @@ internal static class Updater
             if (EventWaitHandle.TryOpenExisting(StartedEventName, out var ev)) using (ev) ev.Set();
         }
         catch (Exception ex) { log.Error($"update: could not signal start: {ex.Message}"); }
-        log.Info($"update: now running {CurrentVersion}");
+        log.Always($"update: now running {CurrentVersion}");
         _ = Task.Run(async () =>
         {
             for (int i = 0; i < 60; i++)
@@ -212,7 +248,7 @@ internal static class Updater
                 {
                     if (!File.Exists(OldPath)) return;
                     File.Delete(OldPath);
-                    log.Info("update: removed the previous version");
+                    log.Always("update: removed the previous version");
                     return;
                 }
                 catch { await Task.Delay(500); }

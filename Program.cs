@@ -15,7 +15,9 @@ internal static class Program
         var log = new Logger();
 
         if (args.Contains("--selftest")) return SelfTest.Run(log);
+#if TEST_HOOKS
         if (args.Length >= 4 && args[0] == "--arm-test") return SelfTest.ArmTest(log, args);
+#endif
         if (args.Contains("--startup-test")) return SelfTest.StartupTest(log);
         if (args.Length >= 2 && args[0] == "--settings-screenshot") return SelfTest.SettingsScreenshot(log, args[1]);
 
@@ -23,7 +25,13 @@ internal static class Program
         bool afterUpdate = args.Contains("--after-update");
         if (!TakeInstanceLock(afterUpdate ? TimeSpan.FromSeconds(15) : TimeSpan.Zero)) return 0;
 
-        Application.Run(new TrayContext(log, afterUpdate, updateNow: args.Contains("--update-now")));
+#if TEST_HOOKS
+        bool updateNow = args.Contains("--update-now");   // headless update, for the updater end-to-end test
+        bool settingsCycle = args.Contains("--settings-cycle");   // open Settings, close it (memory measurements)
+#else
+        const bool updateNow = false, settingsCycle = false;
+#endif
+        Application.Run(new TrayContext(log, afterUpdate, updateNow, settingsCycle));
         ReleaseInstanceLock();
         return 0;
     }
@@ -59,15 +67,15 @@ internal sealed class TrayContext : ApplicationContext
     readonly ToolStripMenuItem _enabledItem;
     Config _cfg;
 
-    public TrayContext(Logger log, bool afterUpdate = false, bool updateNow = false)
+    public TrayContext(Logger log, bool afterUpdate = false, bool updateNow = false, bool settingsCycle = false)
     {
         _log = log;
         _cfg = Config.Load(log);
-        _log.Debug = _cfg.DebugLog;
+        _log.Verbose = _cfg.VerboseLog;
         WindowMover.VerticalShrinkShare = _cfg.VerticalShrinkShare;
-        _log.Info($"started {Updater.CurrentVersion}; mode={_cfg.Mode}, apps=[{string.Join(", ", _cfg.Apps)}]");
+        _log.Always($"started {Updater.CurrentVersion}; mode={_cfg.Mode}, apps=[{string.Join(", ", _cfg.Apps)}]");
         foreach (var s in Screen.AllScreens)
-            _log.Info($"  monitor {s.DeviceName} {s.Bounds} primary={s.Primary}");
+            _log.Always($"  monitor {s.DeviceName} {s.Bounds} primary={s.Primary}");
 
         _tracker = new Tracker(_cfg, log);
 
@@ -80,6 +88,7 @@ internal sealed class TrayContext : ApplicationContext
         menu.Items.Add(settingsItem);
         menu.Items.Add("Reload config.json", null, (_, _) => Reload());
         menu.Items.Add("Open log", null, (_, _) => Open(Logger.FilePath));
+        menu.Items.Add("Report a problem...", null, (_, _) => ShowReport());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => ExitThread());
 
@@ -94,6 +103,20 @@ internal sealed class TrayContext : ApplicationContext
 
         if (afterUpdate) Updater.ConfirmStarted(_log);
         if (updateNow) StartHeadlessUpdate();
+        if (settingsCycle) StartSettingsCycle();
+    }
+
+    /// <summary>`--settings-cycle` (test builds): open Settings after 3 s and close it 5 s later.</summary>
+    void StartSettingsCycle()
+    {
+        int step = 0;
+        var timer = new System.Windows.Forms.Timer { Interval = 3000 };
+        timer.Tick += (_, _) =>
+        {
+            if (step++ == 0) { ShowSettings(); timer.Interval = 5000; }
+            else { _settings?.Close(); timer.Dispose(); }
+        };
+        timer.Start();
     }
 
     /// <summary>`--update-now` (testing): check, download and install without the settings window.</summary>
@@ -121,8 +144,9 @@ internal sealed class TrayContext : ApplicationContext
     /// exits; on failure it carries on as before and the error is returned.</summary>
     public async Task<string?> InstallUpdateAsync(string downloaded)
     {
-        _log.Info("update: installing");
+        _log.Always("update: installing");
         _settings?.Close();
+        _report?.Close();
         _tracker.Enabled = false;
         _tray.Visible = false;
         Program.ReleaseInstanceLock();
@@ -146,19 +170,19 @@ internal sealed class TrayContext : ApplicationContext
         _enabledItem.Checked = on;
         _tray.Icon = MakeIcon(on);
         _tray.Text = on ? "LaunchHere - on" : "LaunchHere - paused";
-        _log.Info(on ? "enabled" : "paused");
+        _log.Always(on ? "enabled" : "paused");
     }
 
     void Reload()
     {
         Use(Config.Load(_log));
-        _log.Info($"settings reloaded; mode={_cfg.Mode}, apps=[{string.Join(", ", _cfg.Apps)}]");
+        _log.Always($"settings reloaded; mode={_cfg.Mode}, apps=[{string.Join(", ", _cfg.Apps)}]");
     }
 
     void Use(Config cfg)
     {
         _cfg = cfg;
-        _log.Debug = _cfg.DebugLog;
+        _log.Verbose = _cfg.VerboseLog;
         WindowMover.VerticalShrinkShare = _cfg.VerticalShrinkShare;
         _tracker.UpdateConfig(_cfg);
     }
@@ -177,11 +201,38 @@ internal sealed class TrayContext : ApplicationContext
         {
             cfg.Save(_log);
             Use(cfg);
-            _log.Info($"settings saved; mode={_cfg.Mode}, apps=[{string.Join(", ", _cfg.Apps)}]");
-        }, InstallUpdateAsync);
-        _settings.Closed += (_, _) => _settings = null;
+            _log.Always($"settings saved; mode={_cfg.Mode}, apps=[{string.Join(", ", _cfg.Apps)}]");
+        }, InstallUpdateAsync, ShowReport);
+        _settings.Closed += (_, _) => { _settings = null; Wpf.TrimWhenAllClosed(); };
         _settings.Show();
         _settings.Activate();
+    }
+
+    ReportWindow? _report;
+
+    void ShowReport()
+    {
+        if (_report != null)
+        {
+            if (_report.WindowState == System.Windows.WindowState.Minimized) _report.WindowState = System.Windows.WindowState.Normal;
+            _report.Activate();
+            return;
+        }
+        _report = new ReportWindow(() => _cfg, _log, EnableVerboseLog);
+        _report.Closed += (_, _) => { _report = null; Wpf.TrimWhenAllClosed(); };
+        _report.Show();
+        _report.Activate();
+    }
+
+    /// <summary>"Turn on verbose logging" in the report window: save it straight away.</summary>
+    void EnableVerboseLog()
+    {
+        var c = _cfg.Clone();
+        c.VerboseLog = true;
+        c.Save(_log);
+        Use(c);
+        _log.Always("verbose logging turned on (Report a problem)");
+        _settings?.ShowVerboseOn();
     }
 
     static void Open(string path)
@@ -214,7 +265,7 @@ internal sealed class TrayContext : ApplicationContext
         _tray.Visible = false;
         _tray.Dispose();
         _tracker.Dispose();
-        _log.Info("exited");
+        _log.Always("exited");
         base.ExitThreadCore();
     }
 }
@@ -223,11 +274,12 @@ internal sealed class TrayContext : ApplicationContext
 /// maximized) and writes the results to the log. Exit code 0 = all passed.</summary>
 internal static class SelfTest
 {
-    /// <summary>`--arm-test X Y program [args...]`: pretend a taskbar click happened at X,Y, launch the
-    /// program, trace what happens for 10 s, then exit.</summary>
+#if TEST_HOOKS
+    /// <summary>`--arm-test X Y program [args...]` (test builds only): pretend a taskbar click happened at
+    /// X,Y, launch the program, trace what happens for 10 s, then exit.</summary>
     public static int ArmTest(Logger log, string[] args)
     {
-        log.Debug = true;
+        log.Verbose = true;
         var cfg = Config.Load(log);
         WindowMover.VerticalShrinkShare = cfg.VerticalShrinkShare;
         using var tracker = new Tracker(cfg, log);
@@ -244,6 +296,7 @@ internal static class SelfTest
         log.Info("arm-test: done");
         return 0;
     }
+#endif
 
     /// <summary>`--startup-test`: turn "Start with Windows" on and off, check each, then restore
     /// whatever was there before. Exit code 0 = passed.</summary>
@@ -290,9 +343,10 @@ internal static class SelfTest
         var cfg = Config.Load(log);
         cfg.Apps = new() { "chrome.exe", @"C:\Windows\notepad.exe", "Discord.exe" };
         Func<string, Task<string?>> noUpdate = _ => Task.FromResult<string?>(null);
-        Shot(new SettingsWindow(cfg, log, _ => { }, noUpdate), "settings-light.png", w => w.ThemeMode = System.Windows.ThemeMode.Light);
-        Shot(new SettingsWindow(cfg, log, _ => { }, noUpdate), "settings-dark.png", w => w.ThemeMode = System.Windows.ThemeMode.Dark);
-        Shot(new SettingsWindow(cfg, log, _ => { }, noUpdate), "settings-advanced.png", w =>
+        Action noReport = () => { };
+        Shot(new SettingsWindow(cfg, log, _ => { }, noUpdate, noReport), "settings-light.png", w => w.ThemeMode = System.Windows.ThemeMode.Light);
+        Shot(new SettingsWindow(cfg, log, _ => { }, noUpdate, noReport), "settings-dark.png", w => w.ThemeMode = System.Windows.ThemeMode.Dark);
+        Shot(new SettingsWindow(cfg, log, _ => { }, noUpdate, noReport), "settings-advanced.png", w =>
         {
             var s = (SettingsWindow)w;
             s.AdvancedExpander.IsExpanded = true;
@@ -300,12 +354,16 @@ internal static class SelfTest
             s.ContentScroller.ScrollToEnd();
         });
         Shot(new RunningAppsWindow(cfg.Apps), "running-apps.png");
+        var quiet = cfg.Clone();
+        quiet.VerboseLog = false;
+        Shot(new ReportWindow(() => quiet, log, noReport), "report.png");
+        Shot(new ReportWindow(() => quiet, log, noReport), "report-dark.png", w => w.ThemeMode = System.Windows.ThemeMode.Dark);
         return 0;
     }
 
     public static int Run(Logger log)
     {
-        log.Debug = true;
+        log.Verbose = true;
         var screens = Screen.AllScreens;
         if (screens.Length < 2) { log.Error("selftest needs 2+ monitors"); return 2; }
 

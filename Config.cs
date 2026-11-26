@@ -39,7 +39,9 @@ public sealed class Config
     /// this share of that shrink is applied to the height too (0 = keep height, 1 = proportional).</summary>
     public double VerticalShrinkShare { get; set; } = 0.2;
 
-    public bool DebugLog { get; set; } = true;
+    /// <summary>Log every window LaunchHere looks at. Off by default. Replaces 0.1.3's "DebugLog" (which
+    /// was on by default); the old key is ignored, so existing installs switch to off.</summary>
+    public bool VerboseLog { get; set; }
 
     public bool Allows(string exePath)
     {

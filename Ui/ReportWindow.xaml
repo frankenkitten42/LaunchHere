@@ -1,0 +1,99 @@
+<Window x:Class="LaunchHere.ReportWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Report a problem - LaunchHere"
+        Width="780" Height="800" MinWidth="560" MinHeight="560"
+        WindowStartupLocation="CenterScreen">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/LaunchHere;component/Ui/Styles.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Margin="24,20,24,12">
+            <TextBlock Text="Report a problem" Style="{StaticResource RowTitle}" FontSize="20" FontWeight="SemiBold" />
+            <TextBlock Style="{StaticResource Secondary}" FontSize="13" Margin="0,4,0,0"
+                       Text="This opens a new issue on GitHub with the text below filled in (you need a free GitHub account). Issues are public, so check the details and delete anything you'd rather not share. Nothing is sent until you press Create on GitHub." />
+        </StackPanel>
+
+        <Grid Grid.Row="1" Margin="24,0,24,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <!-- Shown while verbose logging is off: the log then has little detail. -->
+            <Border x:Name="VerboseCard" Style="{StaticResource Card}" Margin="0,0,0,12">
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <StackPanel Margin="0,0,16,0">
+                        <TextBlock x:Name="VerboseTitle" Text="Verbose logging is off" Style="{StaticResource RowTitle}" FontWeight="SemiBold" />
+                        <TextBlock x:Name="VerboseText" Style="{StaticResource Secondary}"
+                                   Text="The log below only has the basics. For a more useful report, turn verbose logging on, make the problem happen again, then press Refresh." />
+                    </StackPanel>
+                    <Button x:Name="VerboseButton" Grid.Column="1" Content="Turn on verbose logging" VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+
+            <StackPanel Grid.Row="1">
+                <TextBlock Text="Title" Style="{StaticResource RowTitle}" />
+                <TextBox x:Name="TitleBox" Margin="0,6,0,0" />
+            </StackPanel>
+
+            <StackPanel Grid.Row="2" Margin="0,12,0,0">
+                <TextBlock Text="What happened?" Style="{StaticResource RowTitle}" />
+                <TextBlock Style="{StaticResource Secondary}"
+                           Text="What did you click (and on which monitor), what did you expect, and what happened instead?" />
+                <TextBox x:Name="WhatBox" Margin="0,6,0,0" Height="90" AcceptsReturn="True" TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top" />
+            </StackPanel>
+
+            <Grid Grid.Row="3" Margin="0,12,0,0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="Details (you can edit these)" Style="{StaticResource RowTitle}" />
+                        <TextBlock Style="{StaticResource Secondary}"
+                                   Text="Version, Windows, monitors, settings and the end of launch-here.log." />
+                    </StackPanel>
+                    <CheckBox x:Name="HideTitlesBox" Grid.Column="1" Content="Hide window titles" IsChecked="True"
+                              VerticalAlignment="Center" Margin="12,0,12,0" />
+                    <Button x:Name="RefreshButton" Grid.Column="2" Content="Refresh" VerticalAlignment="Center" />
+                </Grid>
+                <TextBox x:Name="DetailsBox" Grid.Row="1" Margin="0,6,0,0" AcceptsReturn="True" TextWrapping="NoWrap"
+                         FontFamily="Cascadia Mono, Consolas" FontSize="12"
+                         HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                         VerticalContentAlignment="Top" />
+            </Grid>
+        </Grid>
+
+        <Border Grid.Row="2" BorderThickness="0,1,0,0" Padding="24,16" Margin="0,16,0,0"
+                BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
+                Background="{DynamicResource LayerFillColorDefaultBrush}">
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <TextBlock x:Name="StatusText" Style="{StaticResource Secondary}" VerticalAlignment="Center" Margin="0,0,12,0" />
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button x:Name="OpenIssueButton" Content="Open GitHub issue" MinWidth="150" Style="{DynamicResource AccentButtonStyle}" />
+                    <Button x:Name="CopyButton" Content="Copy to clipboard" MinWidth="150" Margin="8,0,0,0" />
+                    <Button x:Name="CloseButton" Content="Close" MinWidth="110" Margin="8,0,0,0" IsCancel="True" />
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

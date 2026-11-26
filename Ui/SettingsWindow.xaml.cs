@@ -25,11 +25,12 @@ public partial class SettingsWindow : Window
     readonly Logger _log;
     readonly Action<Config> _onApply;
     readonly Func<string, Task<string?>> _installUpdate;
+    readonly Action _openReport;
     readonly ObservableCollection<AppEntry> _apps = new();
     bool _loading;
     UpdateInfo? _update;
 
-    internal SettingsWindow(Config cfg, Logger log, Action<Config> onApply, Func<string, Task<string?>> installUpdate)
+    internal SettingsWindow(Config cfg, Logger log, Action<Config> onApply, Func<string, Task<string?>> installUpdate, Action openReport)
     {
         Wpf.EnsureInitialized();
         InitializeComponent();
@@ -40,6 +41,7 @@ public partial class SettingsWindow : Window
         _log = log;
         _onApply = onApply;
         _installUpdate = installUpdate;
+        _openReport = openReport;
 
         AppsList.ItemsSource = _apps;
         _apps.CollectionChanged += (_, _) =>
@@ -59,6 +61,12 @@ public partial class SettingsWindow : Window
         UpdateNowButton.Click += async (_, _) => await UpdateNow();
         ReleaseNotesButton.Click += (_, _) => { if (_update != null) OpenUrl(_update.PageUrl); };
         ConfigLink.Click += (_, _) => OpenUrl(Config.FilePath);
+        OpenLogButton.Click += (_, _) =>
+        {
+            if (!File.Exists(Logger.FilePath)) File.WriteAllText(Logger.FilePath, "");
+            OpenUrl(Logger.FilePath);
+        };
+        ReportButton.Click += (_, _) => _openReport();
         VersionText.Text = $"LaunchHere {Updater.CurrentVersion}";
 
         OkButton.Click += (_, _) => { if (Apply()) Close(); };
@@ -66,7 +74,7 @@ public partial class SettingsWindow : Window
         ApplyButton.Click += (_, _) => Apply();
 
         LoadValues();
-        foreach (var t in new[] { WatchTaskbarToggle, WatchDesktopToggle, MoveOpenToggle, StartupToggle, DebugLogToggle })
+        foreach (var t in new[] { WatchTaskbarToggle, WatchDesktopToggle, MoveOpenToggle, StartupToggle, VerboseLogToggle })
         {
             t.Checked += (_, _) => Dirty();
             t.Unchecked += (_, _) => Dirty();
@@ -95,7 +103,16 @@ public partial class SettingsWindow : Window
         GraceBox.Text = _cfg.SameAppGraceMs.ToString();
         CancelBox.Text = _cfg.ActivationCancelMs.ToString();
         ShrinkBox.Text = _cfg.VerticalShrinkShare.ToString("0.##");
-        DebugLogToggle.IsChecked = _cfg.DebugLog;
+        VerboseLogToggle.IsChecked = _cfg.VerboseLog;
+        _loading = false;
+    }
+
+    /// <summary>Verbose logging was switched on elsewhere (Report a problem): show it without marking
+    /// the window as changed.</summary>
+    internal void ShowVerboseOn()
+    {
+        _loading = true;
+        VerboseLogToggle.IsChecked = true;
         _loading = false;
     }
 
@@ -160,7 +177,7 @@ public partial class SettingsWindow : Window
         c.SameAppGraceMs = grace;
         c.ActivationCancelMs = cancel;
         c.VerticalShrinkShare = shrink;
-        c.DebugLog = DebugLogToggle.IsChecked == true;
+        c.VerboseLog = VerboseLogToggle.IsChecked == true;
         _onApply(c);
         ApplyButton.IsEnabled = false;
         return true;
